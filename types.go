@@ -216,6 +216,8 @@ type Con struct {
 	Timestamp     *Timestamp
 	SecCtx        *SecCtx
 	Exp           *Exp
+	Label         *[]byte
+	LabelMask     *[]byte
 }
 
 // CPUStat contains various conntrack related per CPU statistics

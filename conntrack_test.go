@@ -4,6 +4,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/florianl/go-conntrack/internal/unix"
 	"github.com/mdlayher/netlink"
 	"github.com/mdlayher/netlink/nltest"
 )
@@ -199,5 +200,68 @@ func TestCreate(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func testMarshal(t Table, f Family, att Con) error {
+	query, err := nestAttributes(nil, &att)
+	if err != nil {
+		return err
+	}
+	data := putExtraHeader(uint8(f), unix.NFNETLINK_V0, unix.NFNL_SUBSYS_CTNETLINK)
+	data = append(data, query...)
+
+	req := netlink.Message{
+		Header: netlink.Header{
+			Type:  netlink.HeaderType(t << 8),
+			Flags: netlink.Request | netlink.Acknowledge,
+		},
+		Data: data,
+	}
+
+	_ = req
+
+	return nil
+}
+
+func BenchmarkMsg(b *testing.B) {
+	var filter Con
+	src := net.ParseIP("172.30.1.60")
+	dst := net.ParseIP("172.30.1.72")
+	proto := uint8(6)
+	sp := uint16(50965)
+	dp := uint16(22)
+
+	label := make([]byte, 16)
+	label[0] = 0x11
+	label[1] = 0x99
+	/*
+		label[2] = 22
+		label[3] = 33
+	*/
+
+	labelMask := make([]byte, 16)
+	labelMask[0] = 0xff
+	labelMask[1] = 0xff
+	/*
+		labelMask[2] = 0xff
+		labelMask[1] = 0xff
+	*/
+
+	filter.Origin = &IPTuple{
+		Src: &src,
+		Dst: &dst,
+		Proto: &ProtoTuple{
+			Number:  &proto,
+			SrcPort: &sp,
+			DstPort: &dp,
+		},
+	}
+
+	filter.Label = &label
+	filter.LabelMask = &labelMask
+
+	for i := 0; i < b.N; i++ {
+		testMarshal(Conntrack, IPv4, filter)
 	}
 }

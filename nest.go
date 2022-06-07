@@ -81,6 +81,14 @@ func nestAttributes(logger *log.Logger, filters *Con) ([]byte, error) {
 		}
 	}
 
+	if filters.Label != nil && len(*filters.Label) > 0 {
+		ae.Bytes(ctaLables, *filters.Label)
+
+		if filters.LabelMask != nil && len(*filters.LabelMask) > 0 {
+			ae.Bytes(ctaLablesMask, *filters.LabelMask)
+		}
+	}
+
 	return ae.Encode()
 }
 

@@ -770,6 +770,12 @@ func extractAttribute(c *Con, logger *log.Logger, data []byte) error {
 				return err
 			}
 			c.NatSrc = nat
+		case ctaLables:
+			label := ad.Bytes()
+			c.Label = &label
+		case ctaLablesMask:
+			labelMask := ad.Bytes()
+			c.LabelMask = &labelMask
 		default:
 			logger.Printf("extractAttribute() - Unknown attribute: %d %d %v\n", ad.Type()&0xFF, ad.Type(), ad.Bytes())
 		}
