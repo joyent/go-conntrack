@@ -41,6 +41,11 @@ const (
 	ipctnlMsgExpGetStatsCPU
 )
 
+const (
+	MaxNetlinkMessageSize = 16384
+	NetlinkHeaderSize     = 16
+)
+
 // for detailes see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/go/tensor.go#L488-L505
 var nativeEndian binary.ByteOrder
 
@@ -233,6 +238,110 @@ func (nfct *Nfct) Update(t Table, f Family, attributes Con) error {
 	}
 
 	return nfct.execute(req)
+}
+
+// send a message with no reply
+func (nfct *Nfct) UpdateSingle(t Table, f Family, attrs []*Con) error {
+	if t != Conntrack {
+		return ErrUnknownCtTable
+	}
+
+	for _, attr := range attrs {
+		query, err := nestAttributes(nfct.logger, attr)
+		if err != nil {
+			return err
+		}
+
+		data := putExtraHeader(uint8(f), unix.NFNETLINK_V0, unix.NFNL_SUBSYS_CTNETLINK)
+		data = append(data, query...)
+
+		req := netlink.Message{
+			Header: netlink.Header{
+				Type: netlink.HeaderType(t << 8),
+				//Flags: netlink.Request | netlink.Acknowledge,
+				// no reply
+				Flags: netlink.Request,
+			},
+			Data: data,
+		}
+
+		if t == Conntrack {
+			req.Header.Type |= netlink.HeaderType(ipctnlMsgCtNew)
+		} else if t == Expected {
+			req.Header.Type |= netlink.HeaderType(ipctnlMsgExpNew)
+		} else {
+			return ErrUnknownCtTable
+		}
+
+		_, e := nfct.Con.Send(req)
+		if e != nil {
+			return e
+		}
+	}
+
+	return nil
+}
+
+// send messages with no reply
+func (nfct *Nfct) UpdateBatch(t Table, f Family, attrs []*Con) error {
+	if t != Conntrack {
+		return ErrUnknownCtTable
+	}
+
+	var err error
+	var dataLen, l int
+
+	msgs := make([]netlink.Message, 0)
+
+	for _, attr := range attrs {
+		query, err := nestAttributes(nfct.logger, attr)
+		if err != nil {
+			return err
+		}
+		data := putExtraHeader(uint8(f), unix.NFNETLINK_V0, unix.NFNL_SUBSYS_CTNETLINK)
+		data = append(data, query...)
+
+		req := netlink.Message{
+			Header: netlink.Header{
+				Type: netlink.HeaderType(t << 8),
+				//Flags: netlink.Request | netlink.Acknowledge,
+				// no reply
+				Flags: netlink.Request,
+			},
+			Data: data,
+		}
+
+		if t == Conntrack {
+			req.Header.Type |= netlink.HeaderType(ipctnlMsgCtNew)
+		} else if t == Expected {
+			req.Header.Type |= netlink.HeaderType(ipctnlMsgExpNew)
+		} else {
+			return ErrUnknownCtTable
+		}
+
+		l = len(data) + NetlinkHeaderSize
+
+		// exceed max size
+		if dataLen+l > MaxNetlinkMessageSize {
+			_, err = nfct.Con.SendMessages(msgs)
+			if err != nil {
+				return err
+			}
+
+			msgs = make([]netlink.Message, 0)
+			dataLen = 0
+		}
+
+		dataLen += l
+		msgs = append(msgs, req)
+	}
+
+	err = nil
+	if len(msgs) > 0 {
+		_, err = nfct.Con.SendMessages(msgs)
+	}
+
+	return err
 }
 
 // Delete elements from the conntrack subsystem with certain attributes
