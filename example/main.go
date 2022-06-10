@@ -13,7 +13,9 @@ import (
 )
 
 func main() {
-	ExampleUpdate()
+	//ExampleUpdate()
+
+	ExampleNfct_Dump()
 }
 
 func ExampleEvent() {
@@ -53,6 +55,89 @@ func ExampleEvent() {
 
 }
 
+func dumpCon(con *ct.Con) {
+	org := con.Origin
+
+	src := org.Src.String()
+	dst := org.Dst.String()
+	proto := org.Proto
+
+	var sp, dp uint16
+	var zone uint16
+	var mark uint32
+
+	if con.Zone != nil {
+		zone = *con.Zone
+	}
+
+	if con.Mark != nil {
+		mark = *con.Mark
+	}
+
+	if proto.SrcPort != nil {
+		sp = *proto.SrcPort
+	}
+
+	if proto.DstPort != nil {
+		dp = *proto.DstPort
+	}
+
+	var label []byte
+	if con.Label != nil {
+		label = *con.Label
+	}
+
+	fmt.Printf(">>> con:%+v, org:%+v, reply: %+v \n", con, con.Origin, con.Reply)
+
+	if *proto.Number == 1 {
+		var id uint16
+		var t, c uint8
+
+		if proto.IcmpID != nil {
+			id = *proto.IcmpID
+		}
+
+		if proto.IcmpType != nil {
+			t = *proto.IcmpType
+		}
+
+		if proto.IcmpCode != nil {
+			c = *proto.IcmpCode
+		}
+
+		fmt.Printf(">>> %s => %s, id=%d, type=%d, code=%d, zone=%d, mark=%d, label=%v \n",
+			src, dst, id, t, c, zone, mark, label)
+
+	} else {
+		fmt.Printf(">>> %s:%d => %s:%d, zone=%d, mark=%d, label=%v \n", src, sp, dst, dp, zone, mark, label)
+	}
+}
+
+func updateCon(nfct *ct.Nfct, con *ct.Con) {
+
+	fmt.Printf("### Update con \n")
+	timestamp := uint32(time.Now().Unix())
+
+	label := make([]byte, 16)
+	binary.LittleEndian.PutUint32(label[1:5], timestamp)
+	label[0] = 33
+
+	labelMask := make([]byte, 16)
+	binary.LittleEndian.PutUint32(labelMask[1:5], ^uint32(0))
+	labelMask[0] = 0xff
+
+	con.Label = &label
+	con.LabelMask = &labelMask
+
+	con.Reply = nil
+	con.Mark = nil
+
+	err := nfct.Update(ct.Conntrack, ct.IPv4, *con)
+	if err != nil {
+		fmt.Println("### error UpdateBatch:", err)
+	}
+}
+
 func ExampleNfct_Dump() {
 	nfct, err := ct.Open(&ct.Config{})
 	if err != nil {
@@ -68,7 +153,18 @@ func ExampleNfct_Dump() {
 	}
 
 	for _, session := range sessions {
-		fmt.Printf("%#v\n", session)
+
+		if *session.Origin.Proto.Number == 6 &&
+			*session.Origin.Proto.DstPort == 22 {
+			dumpCon(&session)
+			updateCon(nfct, &session)
+		}
+
+		if session.Label != nil {
+			//dumpCon(&session)
+			//fmt.Printf("%#v\n", session)
+			//fmt.Printf("### Label: %+v \n", session.Label)
+		}
 	}
 }
 

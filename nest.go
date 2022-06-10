@@ -17,6 +17,7 @@ func nestAttributes(logger *log.Logger, filters *Con) ([]byte, error) {
 		}
 		ae.Bytes(ctaTupleOrig|nlafNested, data)
 	}
+
 	if filters.Reply != nil {
 		data, err := marshalIPTuple(logger, filters.Reply)
 		if err != nil {
@@ -30,6 +31,7 @@ func nestAttributes(logger *log.Logger, filters *Con) ([]byte, error) {
 		ae.Uint32(ctaID, *filters.ID)
 		ae.ByteOrder = nativeEndian
 	}
+
 	if filters.Mark != nil {
 		ae.ByteOrder = binary.BigEndian
 		ae.Uint32(ctaMark, *filters.Mark)
@@ -47,11 +49,13 @@ func nestAttributes(logger *log.Logger, filters *Con) ([]byte, error) {
 		ae.Uint32(ctaTimeout, *filters.Timeout)
 		ae.ByteOrder = nativeEndian
 	}
+
 	if filters.Status != nil {
 		ae.ByteOrder = binary.BigEndian
 		ae.Uint32(ctaStatus, *filters.Status)
 		ae.ByteOrder = nativeEndian
 	}
+
 	if filters.ProtoInfo != nil {
 		data, err := marshalProtoInfo(logger, filters.ProtoInfo)
 		if err != nil {
@@ -59,6 +63,7 @@ func nestAttributes(logger *log.Logger, filters *Con) ([]byte, error) {
 		}
 		ae.Bytes(ctaProtoinfo|nlafNested, data)
 	}
+
 	if filters.Helper != nil {
 		data, err := marshalHelper(logger, filters.Helper)
 		if err != nil {
@@ -87,6 +92,12 @@ func nestAttributes(logger *log.Logger, filters *Con) ([]byte, error) {
 		if filters.LabelMask != nil && len(*filters.LabelMask) > 0 {
 			ae.Bytes(ctaLablesMask, *filters.LabelMask)
 		}
+	}
+
+	if filters.Zone != nil {
+		ae.ByteOrder = binary.BigEndian
+		ae.Uint16(ctaZone, *filters.Zone)
+		ae.ByteOrder = nativeEndian
 	}
 
 	return ae.Encode()
