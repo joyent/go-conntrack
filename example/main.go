@@ -14,8 +14,9 @@ import (
 
 func main() {
 	//ExampleUpdate()
+	//ExampleNfct_Dump()
 
-	ExampleNfct_Dump()
+	GetConnByMark()
 }
 
 func ExampleEvent() {
@@ -154,8 +155,9 @@ func ExampleNfct_Dump() {
 
 	for _, session := range sessions {
 
-		if *session.Origin.Proto.Number == 6 &&
-			*session.Origin.Proto.DstPort == 22 {
+		if (*session.Origin.Proto.Number == 6 &&
+			*session.Origin.Proto.DstPort == 22) ||
+			session.Zone != nil {
 			dumpCon(&session)
 			updateCon(nfct, &session)
 		}
@@ -299,7 +301,7 @@ func ExampleGet(filters []*ct.Con) {
 	for _, filter := range filters {
 		sessions, err := nfct.Get(ct.Conntrack, ct.IPv4, *filter)
 		if err != nil {
-			fmt.Println("could not dump sessions:", err)
+			fmt.Println("could not Get sessions:", err)
 			return
 		}
 
@@ -310,4 +312,42 @@ func ExampleGet(filters []*ct.Con) {
 			}
 		}
 	}
+}
+
+func ExampleQuery(filter ct.FilterAttr) {
+	nfct, err := ct.Open(&ct.Config{})
+	if err != nil {
+		fmt.Println("could not create nfct:", err)
+		return
+	}
+	defer nfct.Close()
+
+	sessions, err := nfct.Query(ct.Conntrack, ct.IPv4, filter)
+	if err != nil {
+		fmt.Println("could not Query sessions:", err)
+		return
+	}
+
+	for i, session := range sessions {
+		fmt.Printf("### Query: %d\n", i)
+		dumpCon(&session)
+
+		if session.Label != nil {
+			fmt.Printf("### Label: %+v \n", session.Label)
+		}
+	}
+}
+
+func GetConnByMark() {
+	var q ct.FilterAttr
+	q.Mark = make([]byte, 4)
+	q.MarkMask = make([]byte, 4)
+	q.MarkMask[0] = 0xff
+	q.MarkMask[1] = 0xff
+	q.MarkMask[2] = 0xff
+	q.MarkMask[3] = 0xff
+
+	binary.BigEndian.PutUint32(q.Mark, 4)
+
+	ExampleQuery(q)
 }
