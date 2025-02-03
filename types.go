@@ -1,6 +1,7 @@
 package conntrack
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -59,6 +60,10 @@ type Config struct {
 	//
 	// When DisableNSLockThread is set, the caller cannot set the NetNS value.
 	DisableNSLockThread bool
+
+	// AddConntrackInformation enriches Con and provides additional information of
+	// the Netlink/Conntrack origin.
+	AddConntrackInformation bool
 }
 
 // Nfct represents a conntrack handler
@@ -70,7 +75,15 @@ type Nfct struct {
 
 	errChan chan error
 
+	debug bool
+
 	setWriteTimeout func() error
+
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+	shutdown  chan struct{}
+
+	addConntrackInformation bool
 }
 
 // adjust the WriteTimeout (mostly for testing)
@@ -197,6 +210,8 @@ type Nat struct {
 
 // Con contains all the information of a connection
 type Con struct {
+	Info *InfoSource
+
 	Origin        *IPTuple
 	Reply         *IPTuple
 	ProtoInfo     *ProtoInfo
@@ -208,6 +223,7 @@ type Con struct {
 	SeqAdjRepl    *SeqAdj
 	ID            *uint32
 	Status        *uint32
+	StatusMask    *uint32
 	Use           *uint32
 	Mark          *uint32
 	MarkMask      *uint32
@@ -218,6 +234,15 @@ type Con struct {
 	Exp           *Exp
 	Label         *[]byte
 	LabelMask     *[]byte
+}
+
+// InfoSource provides further information from Netlink about a connection.
+type InfoSource struct {
+	// Conntrack table this information originates from.
+	Table Table
+
+	// NetlinkGroup this information originates from.
+	NetlinkGroup NetlinkGroup
 }
 
 // CPUStat contains various conntrack related per CPU statistics
@@ -377,6 +402,8 @@ const (
 	AttrExpClass  ConnAttrType = iota /* u32 bits */
 	AttrExpNATDir ConnAttrType = iota /* u32 bits */
 
+	// for internal use only
+	attrUnspec ConnAttrType = iota
 )
 
 // Various errors which may occur when processing attributes

@@ -21,6 +21,9 @@ const (
 
 	// Expected is a table containing information about related connections to existing ones
 	Expected Table = unix.NFNL_SUBSYS_CTNETLINK_EXP
+
+	// Timeout is a table containing timeout information of connection flows.
+	Timeout Table = unix.NFNL_SUBSYS_CTNETLINK_TIMEOUT
 )
 
 const (
@@ -70,12 +73,54 @@ func (devNull) Write(p []byte) (int, error) {
 	return 0, nil
 }
 
+// Open a connection to the conntrack subsystem
+func Open(config *Config) (*Nfct, error) {
+	var nfct Nfct
+
+	con, err := netlink.Dial(unix.NETLINK_NETFILTER, &netlink.Config{NetNS: config.NetNS, DisableNSLockThread: config.DisableNSLockThread})
+	if err != nil {
+		return nil, err
+	}
+	nfct.Con = con
+
+	if config.Logger == nil {
+		nfct.logger = log.New(new(devNull), "", 0)
+	} else {
+		nfct.logger = config.Logger
+	}
+
+	if config.WriteTimeout > 0 {
+		nfct.setWriteTimeout = func() error {
+			deadline := time.Now().Add(config.WriteTimeout)
+			return nfct.Con.SetWriteDeadline(deadline)
+		}
+	} else {
+		nfct.setWriteTimeout = func() error { return nil }
+	}
+
+	nfct.addConntrackInformation = config.AddConntrackInformation
+
+	return &nfct, nil
+}
+
 // Close the connection to the conntrack subsystem.
 func (nfct *Nfct) Close() error {
+	if nfct.ctxCancel != nil {
+		nfct.ctxCancel()
+
+		// Block until filters are removed and socket unsubscribed from groups
+		<-nfct.shutdown
+	}
+
 	if nfct.errChan != nil {
 		close(nfct.errChan)
 	}
 	return nfct.Con.Close()
+}
+
+// SetOption allows to enable or disable netlink socket options.
+func (nfct *Nfct) SetOption(o netlink.ConnOption, enable bool) error {
+	return nfct.Con.SetOption(o, enable)
 }
 
 // Flush a conntrack subsystem
@@ -432,11 +477,22 @@ func (nfct *Nfct) Register(ctx context.Context, t Table, group NetlinkGroup, fn 
 // If your function returns something different than 0, it will stop.
 // ConnAttr of the same ConnAttrType will be linked by an OR operation.
 // Otherwise, ConnAttr of different ConnAttrType will be connected by an AND operation for the filter.
+// Note: When you add filters for IPv4 specific fields, it will automatically filter for IPv4-only events.
+// The same rule applies for IPv6. However, if you apply a filter for both IPv4- and IPv6-specific fields,
+// it will result in filtering out all events, meaning no event will match.
 func (nfct *Nfct) RegisterFiltered(ctx context.Context, t Table, group NetlinkGroup, filter []ConnAttr, fn HookFunc) error {
 	return nfct.register(ctx, t, group, filter, fn)
 }
 
+// EnableDebug print bpf filter for RegisterFiltered function
+func (nfct *Nfct) EnableDebug() {
+	nfct.debug = true
+}
+
 func (nfct *Nfct) register(ctx context.Context, t Table, groups NetlinkGroup, filter []ConnAttr, fn func(c Con) int) error {
+	nfct.ctx, nfct.ctxCancel = context.WithCancel(ctx)
+	nfct.shutdown = make(chan struct{})
+
 	if err := nfct.manageGroups(t, uint32(groups), true); err != nil {
 		return err
 	}
@@ -444,32 +500,54 @@ func (nfct *Nfct) register(ctx context.Context, t Table, groups NetlinkGroup, fi
 		return err
 	}
 
+	enricher := func(*Con, netlink.Header) {}
+	if nfct.addConntrackInformation {
+		enricher = func(c *Con, h netlink.Header) {
+			var group NetlinkGroup
+
+			if h.Type&0xFF == ipctnlMsgCtNew {
+				if h.Flags&(netlink.Create|netlink.Excl) != 0 {
+					group = NetlinkCtNew
+				} else {
+					group = NetlinkCtUpdate
+				}
+			} else {
+				group = NetlinkCtDestroy
+			}
+
+			info := InfoSource{
+				Table:        Table((h.Type & 0x300) >> 8),
+				NetlinkGroup: group,
+			}
+			c.Info = &info
+		}
+	}
+
 	go func() {
 		go func() {
 			// block until context is done
-			<-ctx.Done()
+			<-nfct.ctx.Done()
 			// Set the read deadline to a point in the past to interrupt
 			// possible blocking Receive() calls.
 			nfct.Con.SetReadDeadline(time.Now().Add(-1 * time.Second))
-		}()
-		defer func() {
+
 			if err := nfct.removeFilter(); err != nil {
 				nfct.logger.Printf("could not remove filter: %v", err)
 			}
 			if err := nfct.manageGroups(t, uint32(groups), false); err != nil {
 				nfct.logger.Printf("could not unsubscribe from group: %v", err)
 			}
-
+			close(nfct.shutdown)
 		}()
 
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
 			reply, err := nfct.Con.Receive()
 			if err != nil {
+				if nfct.ctx.Err() != nil {
+					// TODO: Here we ignore internal/poll.ErrFileClosing which is expected after
+					//       nfct.ctx is done. Maybe improve graceful handling.
+					return
+				}
 				if opError, ok := err.(*netlink.OpError); ok {
 					if opError.Timeout() || opError.Temporary() {
 						continue
@@ -489,6 +567,7 @@ func (nfct *Nfct) register(ctx context.Context, t Table, groups NetlinkGroup, fi
 					nfct.logger.Printf("could not parse received message: %v", err)
 					continue
 				}
+				enricher(&c, msg.Header)
 				if ret := fn(c); ret != 0 {
 					return
 				}
